@@ -1,11 +1,12 @@
 /**
 	******************************************************************************
-	* @file		ex6_pwm_dynamic/src/main.c
-	* @author	MDS
-	* @date		08032017
-	* @brief	 Produces a dynamic PWM  Waveform on pin D3.
+	* @file		pwm_dynamic/main.c
+	* @author	MDS, mods by ACT
+	* @date		210319
+	* @brief	Produces FHSS burst on pin D3 on terminal input
+	* 		Constantly streams A0 data to terminal
 	*			 See Section 18 (TIM3), P576 of the STM32F4xx Reference Manual.
-	*
+	*		
 	*			NOTE: Refer to lineS 3163 and 4628 of the stm32f4xx_hal_tim.c, and
     *			lines 960 and 974 of stm32f4xx_hal_tim.h files. Refer to pages
     *			102-103 of the STM32F4-Technical-Training.pdf and page 590 of the
@@ -16,6 +17,7 @@
 
 #include "board.h"
 #include "stm32f4xx_hal_conf.h"
+#include "stm32f4xx_hal.h"
 #include "debug_printf.h"
 
 //8 MHz
@@ -32,36 +34,54 @@
 #define PWM_DC_GET() 		__HAL_TIM_GET_COMPARE(&PWM_TIMER_HANDLER, PWM_CHANNEL)
 #define PWM_DC_SET(value) 	__HAL_TIM_SET_COMPARE(&PWM_TIMER_HANDLER, PWM_CHANNEL, value)
 
+#define FHSS_MAX 32
+#define ADCBUFFLEN 128
+
 void Hardware_init();
+void EXTI5_10_IRQHandler(void);
 void set_PWM_freq(int);
 
+ADC_HandleTypeDef AdcHandle;
+ADC_ChannelConfTypeDef AdcChanConfig;
 TIM_HandleTypeDef TIM_Init;
 TIM_OC_InitTypeDef PWMConfig;
 
+/*FHSS Integers generated using matlab
+ * R = randi([20, 50], [1, 32])
+ *[sprintf('%d,', R(1:end-1)), sprintf('%d', R(end))]
+ * */	
+uint8_t FHSS[FHSS_MAX] = {28,21,23,45,41,29,49,21,33,31,43,44,25,35,33,40,41,43,28,41,40,25,23,35,49,30,38,26,43,27,35,41};
+uint8_t ADC_BUFF[ADCBUFFLEN];
 
 int main(void) {
 
 	uint32_t freq = 40000;
 	char RxChar;
-
-	/*FHSS Integers generated using matlab
-	 * R = randi([20, 50], [1, 32])
-	 *[sprintf('%d,', R(1:end-1)), sprintf('%d', R(end))]
-	 * */
-	uint8_t FHSS[32] = {28,21,23,45,41,29,49,21,33,31,43,44,25,35,33,40,41,43,28,41,40,25,23,35,49,30,38,26,43,27,35,41};
+	unsigned int adc_value;
+	int i = 0;
 	BRD_init();
 	Hardware_init();
 
 	while (1) {
 
-		BRD_LEDRedToggle();
-		HAL_Delay(40);
-		RxChar = debug_getc();
-		if (RxChar != '\0') {
-			freq = freq + 1000;
-			set_PWM_freq(freq);	
-			debug_printf("New F: %dkHz\n\r", freq/1000);
-		}
+
+		/*ADC Conv*/
+		HAL_ADC_Start(&AdcHandle);
+		while(HAL_ADC_PollForConversion(&AdcHandle, 10) != HAL_OK);
+
+		adc_value = (uint16_t)(HAL_ADC_GetValue(&AdcHandle));
+		
+		//ADC_BUFF[i++] = (uint8_t) adc_value;
+
+		if(i > ADCBUFFLEN) {
+
+			BRD_LEDRedToggle();
+			for(i = 0; i < ADCBUFFLEN; i++) {
+		//		debug_printf("%d\r\n", ADC_BUFF[i]);
+			}
+			i = 0;
+			BRD_LEDRedToggle();
+		}	
 	}
 
 	return 1;
@@ -81,15 +101,19 @@ void set_PWM_freq(int frequency) {
 void Hardware_init(void) {
 
 	GPIO_InitTypeDef GPIO_InitStructure;
-
+	
 	uint16_t PrescalerValue = 0;
 
 	BRD_LEDInit();
 	BRD_LEDRedOff();
 
 	PWM_PIN_CLK();
+	//PWM Pin
 	__BRD_D3_GPIO_CLK();
+	//ADC in Pin
+	__BRD_A0_GPIO_CLK();
 
+	//PWM
 	GPIO_InitStructure.Pin = PWM_PIN;
 	GPIO_InitStructure.Mode =GPIO_MODE_AF_PP;
 	GPIO_InitStructure.Pull = GPIO_NOPULL;
@@ -97,6 +121,52 @@ void Hardware_init(void) {
 	GPIO_InitStructure.Alternate = PWM_GPIO_AF;
 	HAL_GPIO_Init(BRD_D3_GPIO_PORT, &GPIO_InitStructure);
 
+	//ADC
+	GPIO_InitStructure.Pin = BRD_A0_PIN;
+	GPIO_InitStructure.Mode = GPIO_MODE_ANALOG;
+	GPIO_InitStructure.Pull = GPIO_NOPULL;
+	GPIO_InitStructure.Alternate = 0x00; //Cheaper than importing string.h to do a memset 
+
+	HAL_GPIO_Init(BRD_A0_GPIO_PORT, &GPIO_InitStructure);
+
+	/*UserButton*/
+	BRD_USER_BUTTON_GPIO_CLK_ENABLE();
+	GPIO_InitStructure.Mode = GPIO_MODE_IT_RISING;
+	GPIO_InitStructure.Pull = GPIO_NOPULL;
+	GPIO_InitStructure.Pin = BRD_USER_BUTTON_PIN;
+
+	HAL_GPIO_Init(BRD_USER_BUTTON_GPIO_PORT, &GPIO_InitStructure);
+
+	HAL_NVIC_SetPriority(BRD_USER_BUTTON_EXTI_IRQn, 10, 0);
+	HAL_NVIC_EnableIRQ(BRD_USER_BUTTON_EXTI_IRQn);
+
+	__ADC1_CLK_ENABLE();
+
+	AdcHandle.Instance = (ADC_TypeDef *)(ADC1_BASE);
+	//DIV2 is natural division onto AHB so suspected SysCoreClk/2 = 8MHz
+	AdcHandle.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV2;
+	AdcHandle.Init.Resolution = ADC_RESOLUTION12b;
+	AdcHandle.Init.ScanConvMode = DISABLE;
+	AdcHandle.Init.ContinuousConvMode = DISABLE;
+	AdcHandle.Init.DiscontinuousConvMode = DISABLE;
+	AdcHandle.Init.NbrOfDiscConversion = 0;
+	AdcHandle.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE; //No trigger
+	AdcHandle.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T1_CC1; 
+	AdcHandle.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+	AdcHandle.Init.NbrOfConversion = 1;
+	AdcHandle.Init.DMAContinuousRequests = DISABLE;
+	AdcHandle.Init.EOCSelection = DISABLE;
+
+	HAL_ADC_Init(&AdcHandle);
+
+	AdcChanConfig.Channel = BRD_A0_ADC_CHAN;
+	AdcChanConfig.Rank = 1;
+	AdcChanConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES; //Approx 2.6MHz
+	AdcChanConfig.Offset = 0;
+
+	HAL_ADC_ConfigChannel(&AdcHandle, &AdcChanConfig);
+
+	/*Timer & PWM Setup*/	
 	PrescalerValue = (uint16_t) ((SystemCoreClock /2) / PWM_CLOCKFREQ) - 1;
 
 	TIM_Init.Instance = PWM_TIMER;
@@ -118,6 +188,22 @@ void Hardware_init(void) {
 	HAL_TIM_PWM_ConfigChannel(&TIM_Init, &PWMConfig, PWM_CHANNEL);
 
 	HAL_TIM_PWM_Start(&TIM_Init, PWM_CHANNEL);
-
+	HAL_TIM_PWM_Stop(&TIM_Init, PWM_CHANNEL);
 }
 
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	
+	if (GPIO_Pin == GPIO_PIN_13)
+	{
+		for(int i = 0; i < FHSS_MAX; i++) {
+			//now would be a good time to stream ADC data over UART
+			set_PWM_freq(FHSS[i]*1000);
+			HAL_Delay(1);//1ms = 40 periods @ 40kHz 
+		}
+		HAL_TIM_PWM_Stop(&TIM_Init, PWM_CHANNEL);	
+	}
+}
+
+void EXTI15_10_IRQHandler(void) {
+	HAL_GPIO_EXTI_IRQHandler(BRD_USER_BUTTON_PIN);
+}
