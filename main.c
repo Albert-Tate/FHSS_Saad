@@ -71,14 +71,15 @@ int main(void) {
 
 		adc_value = (uint16_t)(HAL_ADC_GetValue(&AdcHandle));
 		
-		//ADC_BUFF[i++] = (uint8_t) adc_value;
-
+		ADC_BUFF[i] = (uint8_t) adc_value;
+		i++;
 		if(i > ADCBUFFLEN) {
 
 			BRD_LEDRedToggle();
 			for(i = 0; i < ADCBUFFLEN; i++) {
 		//		debug_printf("%d\r\n", ADC_BUFF[i]);
 			}
+			debug_printf("Packet\n\r");
 			i = 0;
 			BRD_LEDRedToggle();
 		}	
@@ -96,6 +97,23 @@ void set_PWM_freq(int frequency) {
 	HAL_TIM_PWM_Start(&TIM_Init, PWM_CHANNEL);
 			
 
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	
+	if (GPIO_Pin == GPIO_PIN_13)
+	{
+		for(int i = 0; i < FHSS_MAX; i++) {
+			//now would be a good time to stream ADC data over UART
+			set_PWM_freq(FHSS[i]*1000);
+			HAL_Delayus(1000);//1ms = 40 periods @ 40kHz 
+		}
+		HAL_TIM_PWM_Stop(&TIM_Init, PWM_CHANNEL);	
+	}
+}
+
+void EXTI15_10_IRQHandler(void) {
+	HAL_GPIO_EXTI_IRQHandler(BRD_USER_BUTTON_PIN);
 }
 
 void Hardware_init(void) {
@@ -161,7 +179,7 @@ void Hardware_init(void) {
 
 	AdcChanConfig.Channel = BRD_A0_ADC_CHAN;
 	AdcChanConfig.Rank = 1;
-	AdcChanConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES; //Approx 2.6MHz
+	AdcChanConfig.SamplingTime = ADC_SAMPLETIME_15CYCLES; //Approx 500kHz
 	AdcChanConfig.Offset = 0;
 
 	HAL_ADC_ConfigChannel(&AdcHandle, &AdcChanConfig);
@@ -191,19 +209,3 @@ void Hardware_init(void) {
 	HAL_TIM_PWM_Stop(&TIM_Init, PWM_CHANNEL);
 }
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-	
-	if (GPIO_Pin == GPIO_PIN_13)
-	{
-		for(int i = 0; i < FHSS_MAX; i++) {
-			//now would be a good time to stream ADC data over UART
-			set_PWM_freq(FHSS[i]*1000);
-			HAL_Delay(1);//1ms = 40 periods @ 40kHz 
-		}
-		HAL_TIM_PWM_Stop(&TIM_Init, PWM_CHANNEL);	
-	}
-}
-
-void EXTI15_10_IRQHandler(void) {
-	HAL_GPIO_EXTI_IRQHandler(BRD_USER_BUTTON_PIN);
-}
