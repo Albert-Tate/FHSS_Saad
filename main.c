@@ -13,12 +13,18 @@
     *			STM32F4XX_reference.pdf. It's pretty good.
 	******************************************************************************
 	*
+	* Generates PWM on D3 when user button pressed. Samples analog values on A0 during
+	*
+	*
+	*
+	*
 	*/
 
 #include "board.h"
 #include "stm32f4xx_hal_conf.h"
 #include "stm32f4xx_hal.h"
 #include "debug_printf.h"
+#include "string.h"
 
 //8 MHz
 #define PWM_CLOCKFREQ		8000000
@@ -51,7 +57,8 @@ TIM_OC_InitTypeDef PWMConfig;
  *[sprintf('%d,', R(1:end-1)), sprintf('%d', R(end))]
  * */	
 uint8_t FHSS[FHSS_MAX] = {28,21,23,45,41,29,49,21,33,31,43,44,25,35,33,40,41,43,28,41,40,25,23,35,49,30,38,26,43,27,35,41};
-uint8_t ADC_BUFF[ADCBUFFLEN];
+uint8_t RX_MEAS[ADCBUFFLEN];
+uint8_t packet_measure = 0;
 
 int main(void) {
 
@@ -64,25 +71,30 @@ int main(void) {
 
 	while (1) {
 
+		if(packet_measure) 
+		{
+			/*ADC Conv*/
+			HAL_ADC_Start(&AdcHandle);
+			while(HAL_ADC_PollForConversion(&AdcHandle, 10) != HAL_OK);
 
-		/*ADC Conv*/
-		HAL_ADC_Start(&AdcHandle);
-		while(HAL_ADC_PollForConversion(&AdcHandle, 10) != HAL_OK);
-
-		adc_value = (uint16_t)(HAL_ADC_GetValue(&AdcHandle));
+			adc_value = (uint16_t)(HAL_ADC_GetValue(&AdcHandle));
 		
-		ADC_BUFF[i] = (uint8_t) adc_value;
-		i++;
-		if(i > ADCBUFFLEN) {
-
-			BRD_LEDRedToggle();
-			for(i = 0; i < ADCBUFFLEN; i++) {
-		//		debug_printf("%d\r\n", ADC_BUFF[i]);
-			}
-			debug_printf("Packet\n\r");
-			i = 0;
-			BRD_LEDRedToggle();
+			RX_MEAS[i] = (uint8_t) adc_value;
+			i++;
+	
 		}	
+		if(i > ADCBUFFLEN || (packet_measure == 0 && i > 0)) 
+		{
+				BRD_LEDRedToggle();
+				debug_printf("RX MEASUREMENT\r\n");
+				for(i = 0; i < ADCBUFFLEN; i++) 
+				{
+					debug_printf("%d\r\n", RX_MEAS[i]);
+				}
+				i = 0;
+				memset(RX_MEAS, 0x00, ADCBUFFLEN);
+				BRD_LEDRedToggle();
+		}
 	}
 
 	return 1;
@@ -106,9 +118,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 		for(int i = 0; i < FHSS_MAX; i++) {
 			//now would be a good time to stream ADC data over UART
 			set_PWM_freq(FHSS[i]*1000);
-			HAL_Delayus(1000);//1ms = 40 periods @ 40kHz 
+			HAL_Delayus(200);//1ms = 8 periods @ 40kHz 
+			
+			HAL_TIM_PWM_Stop(&TIM_Init, PWM_CHANNEL);
+			packet_measure = 1;
+			
+			HAL_Delayus(800); //1 ms total wait, 32ms (40ms with final wait) per distance measurement
 		}
 		HAL_TIM_PWM_Stop(&TIM_Init, PWM_CHANNEL);	
+		HAL_Delayus(6000); //6ms wait, total 1.98m measure distance then. Easy to change.
+		packet_measure = 0;
 	}
 }
 
