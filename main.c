@@ -87,9 +87,9 @@ int main(void) {
 		{
 				BRD_LEDRedToggle();
 				debug_printf("RX MEASUREMENT\r\n");
-				for(i = 0; i < ADCBUFFLEN; i++) 
+				for(int j = 0; j < i; j++) 
 				{
-					debug_printf("%d\r\n", RX_MEAS[i]);
+					debug_printf("%d\r\n", RX_MEAS[j]);
 				}
 				i = 0;
 				memset(RX_MEAS, 0x00, ADCBUFFLEN);
@@ -153,7 +153,7 @@ void Hardware_init(void) {
 	//PWM
 	GPIO_InitStructure.Pin = PWM_PIN;
 	GPIO_InitStructure.Mode =GPIO_MODE_AF_PP;
-	GPIO_InitStructure.Pull = GPIO_NOPULL;
+	GPIO_InitStructure.Pull = GPIO_PULLDOWN;
 	GPIO_InitStructure.Speed = GPIO_SPEED_FAST;
 	GPIO_InitStructure.Alternate = PWM_GPIO_AF;
 	HAL_GPIO_Init(BRD_D3_GPIO_PORT, &GPIO_InitStructure);
